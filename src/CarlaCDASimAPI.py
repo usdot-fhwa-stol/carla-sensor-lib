@@ -6,23 +6,29 @@
 # applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language
 # governing permissions and limitations under the License.
-
+ 
 import sched
 import threading
 import time
 from time import sleep
-
+import logging
 import carla
 import sys
-sys.path.append('../')
+import numpy as np
 
+sys.path.append('../')
+ 
+import os
+cur_path = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(cur_path)
+ 
 from collector.SensorDataCollector import SensorDataCollector
 from noise_models.NoiseModelFactory import NoiseModelFactory
 from objects.CarlaSensor import CarlaSensorBuilder
 from sensor.SemanticLidarSensor import SemanticLidarSensor
 from util.CarlaUtils import CarlaUtils
-
-
+ 
+ 
 class CarlaCDASimAPI:
     """
     Interface to build and manage SimulatedSensors
@@ -33,24 +39,26 @@ class CarlaCDASimAPI:
         self.__carla_world = None
         self.__infrastructure_sensors = {}
 
+        logging.info("CarlaCDASimAPI: Initialized CarlaCDASimAPI instance.")
+ 
     @staticmethod
     def build_from_host_spec(carla_host, carla_port):
         print(f"Connecting to carla {carla_host}:{carla_port}")
         """
         Build an API instance.
-
+ 
         :param carla_host: The CARLA host.
         :param carla_port: The CARLA host port.
         :return: A CarlaCDASimAPI instance.
         """
         client = carla.Client(str(carla_host), int(carla_port))
         return CarlaCDASimAPI.build_from_client(client)
-
+ 
     @staticmethod
     def build_from_client(carla_client):
         """
         Build an API instance.
-
+ 
         :param carla_client: The CARLA client.
         :return: A CarlaCDASimAPI instance.
         """
@@ -59,23 +67,23 @@ class CarlaCDASimAPI:
         api.__client.set_timeout(2.0)
         api.__carla_world = api.__client.get_world()
         return api
-
+ 
     @staticmethod
     def build_from_world(carla_world):
         """
         Build an API instance.
-
+ 
         :param carla_world: The CARLA world.
         :return: A CarlaCDASimAPI instance.
         """
         api = CarlaCDASimAPI()
         api.__carla_world = carla_world
         return api
-
+ 
     # ------------------------------------------------------------------------------
     # SimulatedSensor Management Interface
     # ------------------------------------------------------------------------------
-
+ 
     def create_simulated_semantic_lidar_sensor(self, simulated_sensor_config, carla_sensor_config, noise_model_config,
                                                detection_cycle_delay_seconds,
                                                infrastructure_id, sensor_id,
@@ -95,20 +103,24 @@ class CarlaCDASimAPI:
         """
         is_return = False
         # Parameter checks
+        
         if not isinstance(infrastructure_id, str):
-            print("Error: infrastructure_id needs to be a string.")
-            is_return = True
+            # print("Error: infrastructure_id needs to be a string.")
+            logging.warning("[sensorlib] Error: infrastructure_id needs to be a string.")
+            # make the infrastructure_id a string instance
+            infrastructure_id = str(infrastructure_id)
         if not isinstance(sensor_id, str):
-            print("Error: sensor_id needs to be a string.")
-            is_return = True
-
+            # print("Error: sensor_id needs to be a string.")
+            logging.warning("[sensorlib] Error: sensor_id needs to be a string.")
+            sensor_id = str(sensor_id) 
+ 
         if is_return:
             is_return = False
             return None
-
+ 
         # Build the transform
         sensor_transform = CarlaUtils.get_transform(sensor_position, sensor_rotation)
-
+ 
         # Retrieve the CARLA sensor
         blueprint_library = self.__carla_world.get_blueprint_library()
         sensor_bp = CarlaCDASimAPI.generate_lidar_bp(blueprint_library, carla_sensor_config)
@@ -116,78 +128,98 @@ class CarlaCDASimAPI:
         if parent_id is not None:
             parent = self.__carla_world.get_actor(parent_id)
         carla_sensor = self.__carla_world.spawn_actor(sensor_bp, sensor_transform, parent)
-
+ 
         # Fix for CARLA not updating position immediately
         sleep(0.2)
-
-        print(f"CarlaCDASimAPI: Creating sensor in CARLA at sensor_position: {carla_sensor.get_location()}")
-
+ 
+        # print(f"CarlaCDASimAPI: Creating sensor in CARLA at sensor_position: {carla_sensor.get_location()}")
+        logging.info(f"[sensorlib] CarlaCDASimAPI: Creating sensor in CARLA at sensor_position: {carla_sensor.get_location()}")
+        
         # Build internal objects
         sensor = CarlaSensorBuilder.build_sensor(carla_sensor)
         data_collector = SensorDataCollector(self.__carla_world, carla_sensor)
         noise_model = NoiseModelFactory.get_noise_model(noise_model_config["noise_model_name"], noise_model_config)
+ 
+        # fix to use in CARLA 0.10.0
+        hf_num_horizontal_points_per_scan = 360
+        hf_num_vertical_points_per_scan = 60
 
+        hf_horizontal_fov = np.deg2rad(15)
+        hf_vertical_fov = np.deg2rad(10)
+
+        hf_rotation_frequency = 1
+        hf_rotation_period = 1.0 / hf_rotation_frequency
+        hf_points_per_second = hf_num_horizontal_points_per_scan * hf_num_vertical_points_per_scan * hf_rotation_frequency
+
+        
+        carla_sensor_config["horizontal_fov"] = 360.0
+        carla_sensor_config["upper_fov"] = 30.0
+        carla_sensor_config["lower_fov"] = -30.0
+        carla_sensor_config["channels"] = hf_num_vertical_points_per_scan
+        carla_sensor_config["rotation_period"] = hf_rotation_period
+        carla_sensor_config["points_per_second"] = hf_points_per_second
+ 
         # Construct the SimulatedSensor
         simulated_sensor = SemanticLidarSensor(infrastructure_id, sensor_id, simulated_sensor_config,
                                                carla_sensor_config,
                                                self.__carla_world, sensor,
                                                data_collector, noise_model,
                                                parent_id)
-
+ 
         # Register the sensor
         self.__infrastructure_sensors[(infrastructure_id, sensor_id)] = simulated_sensor
-
+ 
         # Adding corresponding dummy lidar solely for visualization in Carla Viz
         # because semantic lidar sensor is not visualizable at the moment
         # https://github.com/usdot-fhwa-stol/carma-utils/issues/180
         lidar_bp = CarlaCDASimAPI.generate_lidar_bp(blueprint_library, carla_sensor_config, "lidar")
         lidar_spawn = self.__carla_world.spawn_actor(lidar_bp, sensor_transform)
-        print(f"Created a dummy lidar for visualization with id: {lidar_spawn.id}")
-
+        # print(f"Created a dummy lidar for visualization with id: {lidar_spawn.id}")
+        logging.info(f"[sensorlib] Created a dummy lidar for visualization with id: {lidar_spawn.id}")
+ 
         # Start compute thread
         scheduler = sched.scheduler(time.time, time.sleep)
         scheduler.enter(detection_cycle_delay_seconds, 1, self.__schedule_next_compute,
                         (scheduler, simulated_sensor, detection_cycle_delay_seconds))
         scheduler_thread = threading.Thread(target=scheduler.run)
-        print("*********************************")
-        print("** Starting sensorlib compute. **")
-        print("*********************************")
+        logging.info("[sensorlib] Starting sensorlib compute.")
+        
         scheduler_thread.start()
-
+ 
         return simulated_sensor
-
+ 
     def get_simulated_sensor(self, infrastructure_id, sensor_id):
         """
         Get a specific simulated sensor.
-
+ 
         :param infrastructure_id: The ID of the infrastructure.
         :param sensor_id: The ID of the sensor.
         :return: The SimulatedSensor or None if not found.
         """
         return self.__infrastructure_sensors.get((infrastructure_id, sensor_id))
-
+ 
     def get_detected_objects(self, infrastructure_id, sensor_id):
         """
         Get the detected objects from a specific sensor. The DetectedObject's are those found by the sensor in the most
         recent call to SimulatedSensor.compute_detected_objects().
-
+ 
         :param infrastructure_id: The ID of the infrastructure.
         :param sensor_id: The ID of the sensor.
         :return: List of DetectedObject's discovered by the associated sensor.
         """
         simulated_sensor = self.__infrastructure_sensors.get((infrastructure_id, sensor_id))
         return simulated_sensor.get_detected_objects()
-
+ 
     # ------------------------------------------------------------------------------
     # Helper Functions
     # ------------------------------------------------------------------------------
-
+ 
     def __schedule_next_compute(self, scheduler, simulated_sensor, detection_cycle_delay_seconds):
         """Schedule the next compute cycle."""
         scheduler.enter(detection_cycle_delay_seconds, 1, self.__schedule_next_compute,
                         (scheduler, simulated_sensor, detection_cycle_delay_seconds))
         simulated_sensor.compute_detected_objects()
-
+ 
     @staticmethod
     def generate_lidar_bp(blueprint_library, carla_sensor_config, type=None):
         """Build the CARLA blueprint necessary for CARLA sensor construction."""
@@ -206,10 +238,14 @@ class CarlaCDASimAPI:
             # or calculate a horizontal FOV based on existing parameters if a formula is available.
             # For simplicity, we'll set a reasonable default.
             lidar_bp.set_attribute("horizontal_fov", "360.0")
-
+ 
         lidar_bp.set_attribute("channels", str(carla_sensor_config["channels"]))
         lidar_bp.set_attribute("range", str(carla_sensor_config["range"])) # Note: range is now in meters
         lidar_bp.set_attribute("rotation_frequency", str(1.0 / carla_sensor_config["rotation_period"]))
         lidar_bp.set_attribute("points_per_second", str(carla_sensor_config["points_per_second"]))
         
         return lidar_bp
+ 
+if __name__ == "__main__":
+    api = CarlaCDASimAPI.build_from_host_spec("localhost", 2000)
+ 

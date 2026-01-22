@@ -17,7 +17,10 @@ from objects.DetectedObject import DetectedObjectBuilder
 from sensor.SimulatedSensor import SimulatedSensor
 from util.CarlaUtils import CarlaUtils
 
+import logging
+
 prev_objects = {}
+
 
 class SemanticLidarSensor(SimulatedSensor):
     """
@@ -49,7 +52,10 @@ class SemanticLidarSensor(SimulatedSensor):
         super().__init__(infrastructure_id, sensor_id)
         self.__simulated_sensor_config = simulated_sensor_config
         self.__carla_sensor_config = carla_sensor_config
-
+        
+        # Log the simulated_sensor_config
+        logging.info(f"SemanticLidarSensor {sensor_id} initialized with config: {simulated_sensor_config}")
+        
         # CARLA connection
         self.__carla_world = carla_world
 
