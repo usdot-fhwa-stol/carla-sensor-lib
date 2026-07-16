@@ -1,4 +1,5 @@
 # Copyright (C) 2024 LEIDOS.
+# Ported for Carla 10 by Will Varner @ UGA MSC Lab 2025
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0 Unless required by
@@ -12,6 +13,11 @@ import datetime
 from xmlrpc.server import SimpleXMLRPCServer
 import sys
 sys.path.append('../')
+
+import os
+cur_path = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(cur_path)
+
 from CarlaCDASimAPI import CarlaCDASimAPI
 from util.SimulatedSensorUtils import SimulatedSensorUtils
 class CarlaCDASimAdapter:
@@ -63,10 +69,8 @@ class CarlaCDASimAdapter:
                                                  infrastructure_id, sensor_id,
                                                  sensor_position, sensor_rotation):
         logging.info(f"Received request to create sensor at {sensor_position}")
-        # CARLA 0.9.10 has a bug where the y-axis value is negated.
-        # To correct for this we are negating the request sensor location y
-        # position
-        sensor_position[1] *= -1.0
+        # The bug where the y-axis was negated in CARLA 0.9.10 is fixed in 0.10.0 and later.
+        # The location provided by the XML-RPC client is now correct, so no negation is needed.
         logging.info(f"Updated sensor position to {sensor_position}")
         simulated_sensor = self.__api.create_simulated_semantic_lidar_sensor(self.sensor_config["simulated_sensor"],
                                                                              self.sensor_config["lidar_sensor"],
@@ -98,7 +102,7 @@ if __name__ == "__main__":
     
     arg_parser.add_argument(
         "--carla-host",
-        default="127.0.0.1",
+        default="172.2.0.3",
         type=str,
         help="CARLA host. (default: \"localhost\")")
     
@@ -110,15 +114,15 @@ if __name__ == "__main__":
     
     arg_parser.add_argument(
         "--xmlrpc-server-host",
-        default="localhost",
+        default="172.2.0.5",
         type=str,
         help="XML-RPC server host. (default: \"localhost\")")
     
     arg_parser.add_argument(
         "--xmlrpc-server-port",
-        default=8000,
+        default=8091,
         type=int,
-        help="XML-RPC server port. (default: 8000)")
+        help="XML-RPC server port. (default: 8091)")
     
     arg_parser.add_argument(
         "--sensor-config-file",
